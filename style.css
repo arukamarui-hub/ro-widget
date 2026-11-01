@@ -1,129 +1,165 @@
-:root {
-  --index: 1.47px; 
+const TWITCH_CHANNEL = 'arukosama'; 
+const MAX_GOAL = 15000;             
+const TOP_LIMIT = 11;               
+
+// === ВСТАВЬ СЮДА ССЫЛКУ ИЗ ОКНА НА СКРИНШОТЕ ===
+const DA_WIDGET_URL = 'https://www.donationalerts.com/widget/stream-stats/1893609?token=eYGdYm00Kzxpkn4qc9Rg';
+
+let cacheChatters = [];
+let currentStreamerGoalAmount = 0; 
+let donorsData = {}; 
+
+window.addEventListener('DOMContentLoaded', () => {
+    updateStreamerGoal(currentStreamerGoalAmount);
+    loadDonorsFromWidget();
+    
+    // Каждые 15 секунд запрашиваем обновленный топ из виджета DonationAlerts
+    setInterval(loadDonorsFromWidget, 15000);
+    
+    checkTwitchChatters();
+    setInterval(checkTwitchChatters, 30000);
+});
+
+function loadDonorsFromWidget() {
+    if (!DA_WIDGET_URL || DA_WIDGET_URL.includes('ВСТАВЬ_СЮДА')) return;
+
+    // Запрашиваем данные напрямую со страницы виджета DA через прокси
+    fetch(`https://allorigins.win{encodeURIComponent(DA_WIDGET_URL)}`)
+        .then(res => res.json())
+        .then(data => {
+            if (data && data.contents) {
+                // Парсим страницу виджета и вытаскиваем строки с донатами
+                const parser = new DOMParser();
+                const doc = parser.parseFromString(data.contents, 'text/html');
+                
+                // Ищем все элементы списка (в DA они обычно лежат в ячейках или списках)
+                const items = doc.querySelectorAll('li, div, td'); 
+                let foundAny = false;
+
+                items.forEach(item => {
+                    const text = item.innerText.trim();
+                    // Ищем строки формата "Ник - 500" или "Ник - 500 RUB"
+                    if (text.includes('-')) {
+                        const parts = text.split('-');
+                        if (parts.length >= 2) {
+                            const username = parts[0].trim();
+                            const amountStr = parts[1].replace(/[^0-9.]/g, '');
+                            const amount = parseFloat(amountStr);
+
+                            if (username && !isNaN(amount) && username !== 'Аноним') {
+                                donorsData[username] = amount;
+                                foundAny = true;
+                            }
+                        }
+                    }
+                });
+
+                if (foundAny) {
+                    // Считаем общую сумму для ХП полоски стримера
+                    currentStreamerGoalAmount = Object.values(donorsData).reduce((a, b) => a + b, 0);
+                    updateStreamerGoal(currentStreamerGoalAmount);
+                    renderPartyMembers();
+                }
+            }
+        })
+        .catch(err => console.error('Ошибка чтения виджета:', err));
 }
-.party-list {
-  font-family: "Tahoma", "Arial", sans-serif;
-  width: 395px;
-  height: 465px;
-  background-color: transparent;
-  box-sizing: border-box;
-  padding: calc(10 * var(--index)) calc(8 * var(--index));
-  overflow: hidden;
-  -webkit-font-smoothing: none;
-  -moz-osx-font-smoothing: none;
-  font-smooth: never;
-  text-rendering: optimizeSpeed;
+
+function updateStreamerGoal(current) {
+    const bar = document.getElementById('streamerBar');
+    const text = document.getElementById('streamerGoalText');
+    if (bar && text) {
+        let displayCurrent = Math.floor(current);
+        if (displayCurrent < 1) displayCurrent = 1;
+        
+        let percent = (displayCurrent / MAX_GOAL) * 100;
+        if (percent > 100) percent = 100;
+        if (percent < 5) percent = 5; 
+        
+        bar.style.width = percent + '%';
+        text.innerText = displayCurrent + '/' + MAX_GOAL;
+    }
 }
-.party-member {
-  display: flex;
-  align-items: flex-start;
-  margin-bottom: calc(10 * var(--index)); 
+
+function renderPartyMembers() {
+    const container = document.getElementById('partyListContainer');
+    const oldSlots = container.querySelectorAll('.donor-slot');
+    oldSlots.forEach(slot => slot.remove());
+
+    const sortedDonors = Object.entries(donorsData)
+        .map(([name, amount]) => ({ name, amount }))
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, TOP_LIMIT);
+
+    sortedDonors.forEach(donor => {
+        const amount = parseFloat(donor.amount) || 0;
+        const maxHp = 15000; 
+        
+        let level = 1;
+        if (amount <= 150) {
+            level = 1;
+        } else if (amount >= maxHp) {
+            level = 99;
+        } else {
+            level = 1 + Math.floor(((amount - 150) / (maxHp - 150)) * (99 - 1));
+        }
+
+        let hpPercent = (amount / maxHp) * 100;
+        if (hpPercent > 100) hpPercent = 100;
+        if (hpPercent < 5) hpPercent = 5; 
+
+        const isOnline = cacheChatters.includes(donor.name.toLowerCase());
+        const statusClass = isOnline ? 'status-on' : 'status-off';
+        const statusText = isOnline ? 'ON' : '';
+        const offlineRowClass = isOnline ? '' : ' is-offline';
+
+        const memberDiv = document.createElement('div');
+        memberDiv.className = `party-member donor-slot${offlineRowClass}`; 
+        memberDiv.id = `donor-${donor.name.toLowerCase()}`;
+        memberDiv.setAttribute('data-username', donor.name);
+
+        memberDiv.innerHTML = `
+          <div class="party-status-icon ${statusClass}">${statusText}</div>
+          <div class="party-info">
+            <div class="party-name-row">
+              <span class="username">${donor.name}</span>
+              <span class="level-badge">Lv ${level}</span>
+            </div>
+            <div class="hp-container">
+              <div class="hp-bar-wrapper">
+                <div class="hp-bar donor-hp" style="width: ${hpPercent}%;"></div>
+              </div>
+              <span class="hp-text">${Math.floor(amount)}/${maxHp}</span>
+            </div>
+          </div>
+        `;
+        container.appendChild(memberDiv);
+    });
 }
-.party-status-icon {
-  width: calc(14 * var(--index));
-  height: calc(14 * var(--index));
-  margin-right: calc(8 * var(--index));
-  margin-top: calc(1 * var(--index));
-  flex-shrink: 0;
-  box-sizing: border-box;
-  font-size: calc(8 * var(--index));
-  font-family: "Courier New", monospace;
-  line-height: calc(12 * var(--index));
-  text-align: center;
-  border-radius: calc(2 * var(--index));
-}
-.leader-icon {
-  border: calc(1 * var(--index)) solid #4A5A71;
-  background: linear-gradient(to bottom, #FFFFFF 0%, #E6EBF3 100%);
-  position: relative;
-}
-.leader-icon::after {
-  content: '';
-  position: absolute;
-  left: calc(4 * var(--index));
-  top: calc(-2 * var(--index));
-  width: calc(3 * var(--index));
-  height: calc(7 * var(--index));
-  border: solid #2B579A;
-  border-width: 0 calc(2 * var(--index)) calc(2 * var(--index)) 0;
-  transform: rotate(40deg);
-}
-.status-on {
-  border: calc(1 * var(--index)) solid #7BB57B;
-  background: linear-gradient(to bottom, #EBFCEB 0%, #B7EBB7 100%);
-  color: #216321;
-  font-weight: bold;
-}
-.status-off {
-  background: transparent;
-  border: none;
-  color: transparent;
-}
-.party-info {
-  display: flex;
-  flex-direction: column;
-  width: 100%;
-}
-.party-name-row {
-  display: flex;
-  align-items: center;
-  line-height: calc(12 * var(--index));
-  margin-bottom: calc(4 * var(--index));
-}
-.username {
-  font-size: calc(12 * var(--index));
-  font-weight: bold; 
-  color: #00958C; 
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: calc(150 * var(--index)); 
-}
-.username.is-leader {
-  color: #1A365D;
-}
-.party-member.is-offline .username {
-  color: #8CA2A1 !important;
-}
-.level-badge {
-  font-size: calc(11 * var(--index));
-  color: #555555;
-  font-weight: 500;
-  margin-left: calc(8 * var(--index));
-}
-.hp-container {
-  display: flex;
-  align-items: center;
-}
-.hp-bar-wrapper {
-  width: calc(105 * var(--index));
-  height: calc(5 * var(--index));
-  background-color: #293142; 
-  border: calc(1 * var(--index)) solid #141821;
-  margin-right: calc(8 * var(--index));
-  box-sizing: border-box;
-}
-.hp-bar {
-  height: 100%;
-  box-sizing: border-box;
-}
-.donor-hp {
-  background-color: #00E100;
-  border-bottom: calc(1 * var(--index)) solid #008800; 
-}
-.streamer-hp {
-  background-color: #00E100;
-  border-bottom: calc(1 * var(--index)) solid #008800;
-}
-.party-member.is-offline .donor-hp {
-  background-color: #508060 !important;
-  border-bottom: calc(1 * var(--index)) solid #305040 !important;
-  opacity: 0.6;
-}
-.hp-text {
-  font-size: calc(10 * var(--index));
-  color: #333333;
-  font-weight: bold;
-  letter-spacing: calc(-0.3 * var(--index));
-  line-height: calc(5 * var(--index));
+
+function checkTwitchChatters() {
+    fetch(`https://decapi.me{TWITCH_CHANNEL.toLowerCase()}`)
+        .then(res => res.text())
+        .then(text => {
+            if (text) {
+                cacheChatters = text.split('\n').map(name => name.trim().toLowerCase());
+                
+                const slots = document.querySelectorAll('.donor-slot');
+                slots.forEach(slot => {
+                    const donorName = slot.getAttribute('data-username').toLowerCase();
+                    const icon = slot.querySelector('.party-status-icon');
+                    
+                    if (cacheChatters.includes(donorName)) {
+                        slot.classList.remove('is-offline');
+                        icon.className = 'party-status-icon status-on';
+                        icon.innerText = 'ON';
+                    } else {
+                        slot.classList.add('is-offline');
+                        icon.className = 'party-status-icon status-off';
+                        icon.innerText = '';
+                    }
+                });
+            }
+        })
+        .catch(err => console.error('Ошибка обновления чата:', err));
 }
